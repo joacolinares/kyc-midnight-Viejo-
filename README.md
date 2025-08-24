@@ -1,4 +1,362 @@
+
+
+
+
 # Midnight Network KYC Attestation DApp - Documentation
+
+
+
+
+
+
+## Overview
+
+
+This project implements a **Know Your Customer (KYC) attestation system** on the Midnight Network blockchain. It's a privacy-preserving DApp that verifies user eligibility based on age and country requirements without revealing the actual personal data on-chain.
+
+
+### Key Features
+- **Privacy-First**: Uses zero-knowledge proofs to verify eligibility without exposing sensitive data
+- **Flexible Policies**: Configurable age and country requirements
+- **Admin Controls**: Owner-managed(OpenZeppelin library) attestation system with governance capabilities
+- **Multi-Interface**: Supports both CLI and web browser interactions
+- **Testnet Ready**: Fully integrated with Midnight Network testnet
+
+
+### Use Cases
+- Age verification for regulated services
+- Country-based access control
+- Compliance with KYC regulations
+- Privacy-preserving identity verification
+```
+
+
+### Component Interactions
+
+
+1. **User Layer**: Web UI or CLI interface for user interactions
+2. **API Layer**: Abstracts contract complexity and manages state
+3. **Contract Layer**: Compact smart contract with witness functions
+4. **Network Layer**: Midnight blockchain and supporting services
+5. **Storage Layer**: Private state (local) and public ledger (on-chain)
+
+
+## Technology Stack
+
+
+### Core Technologies
+- **Blockchain**: Midnight Network (privacy-focused blockchain)
+- **Smart Contract Language**: Compact v0.17
+- **Runtime**: Node.js v18+ / TypeScript 5.8.3
+- **Frontend Framework**: React 19
+- **UI Components**: Material-UI v5
+- **Build Tool**: Vite 7.0.0
+- **Package Manager**: npm (with workspaces)
+- **Smart Contract Library**: OpenZeppelin
+- **Smart Contract Language**: Compact v0.17
+- **Smart Contract Language**: TypeScript
+
+
+
+
+### Key Dependencies
+```json
+{
+ "@midnight-ntwrk/compact-runtime": "^0.8.1",
+ "@midnight-ntwrk/midnight-js-contracts": "^2.0.2",
+ "@midnight-ntwrk/wallet": "^5.0.0",
+ "rxjs": "^7.8.2",
+ "fp-ts": "^2.16.10",
+ "pino": "^9.7.0"
+}
+```
+
+
+## Smart Contract Details
+
+
+### Contract: `bboard.compact` (KYC)
+
+
+The KYC attestation contract implements a privacy-preserving identity verification system.
+
+
+#### Core Data Structures
+
+
+```compact
+struct Attestation {
+   epoch: Uint<64>;      // Policy version when issued
+   adult: Uint<1>;       // 1 if meets age requirement
+   inCountry: Uint<1>;   // 1 if in allowed country
+}
+```
+
+
+#### Ledger State
+
+
+```compact
+ledger epoch: Counter;                        // Policy version counter
+ledger instance: Counter;                     // Contract instance ID
+ledger attest: Map<Bytes<32>, Attestation>;  // User attestations
+ledger allowedCountry: Bytes<2>;             // ISO country code
+ledger allowedMinAge: Uint<8>;               // Minimum age requirement
+```
+
+
+#### OpenZeppelin Contract Key Functions
+
+
+##### Admin Functions (Owner Only) (OpenZeppelin)
+- `bumpEpoch()`: Increment policy version
+- `revokeUpk(uPk)`: Remove user attestation
+- `setAdultFlag(uPk, v)`: Manually set adult status
+- `setCountryFlag(uPk, v)`: Manually set country status
+- `setAllowedMinAge(age)`: Update age requirement
+- `setAllowedCountry(country)`: Update country requirement
+
+
+##### User Functions
+- `enrollOnce(ageBytes, country)`: Initial KYC enrollment
+- `selfUpgradeToAdult(ageBytes)`: Age-based status upgrade
+- `selfRefreshCountry(country)`: Update country status
+
+
+##### Query Functions
+- `checkAdultByUpk(uPk)`: Check if user is adult
+- `checkCountryByUpk(uPk)`: Check if user in allowed country
+- `checkEligibleByUpk(uPk)`: Check full eligibility
+- `checkAdultSelf()`: Self-check adult status
+- `checkCountrySelf()`: Self-check country status
+- `checkEligibleSelf()`: Self-check eligibility
+
+
+### Witness Functions
+
+
+Located in `contract/src/witnesses.ts`, these functions manage private state:
+
+
+```typescript
+export const witnesses = {
+ localSecretKey: privateStateKey('localSecretKey')
+};
+export const ageBytes = {
+ localSecretKey: privateStateKey('localSecretKey')
+};
+export const countryAlpha2 = {
+ localSecretKey: privateStateKey('localSecretKey')
+};
+```
+
+
+The witness system ensures that sensitive data (secret keys, age, country) never appear on-chain.
+
+
+## API Layer
+
+
+The main API class (`api/src/index.ts`) provides:
+
+
+#### Core Methods
+```typescript
+class BBoardAPI {
+ // Deployment and joining
+ static async deploy(providers, logger): Promise<BBoardAPI>
+ static async join(providers, contractAddress, logger): Promise<BBoardAPI>
+  // State management
+ ledgerState$: Observable<BBoardDerivedState>
+  // Transaction submission
+ async enrollOnce(): Promise<TransactionId>
+ async selfUpgradeToAdult(age: number): Promise<TransactionId>
+ async selfRefreshCountry(country: string): Promise<TransactionId>
+  // Admin functions
+ async setAllowedMinAge(age: number): Promise<TransactionId>
+ async setAllowedCountry(country: string): Promise<TransactionId>
+ async revokeUpk(userPublicKey: Bytes<32>): Promise<TransactionId>
+}
+```
+
+
+## User Interfaces
+```
+Web UI (React)
+
+
+End-to-end KYC flow:
+
+
+The user connects their wallet (Lace/SDK). Locally we derive a userSecretKey (never published).
+
+
+The user uploads their ID (DNI) and minimal form data.
+
+
+An off-chain Gemini AI service validates the document and extracts fields (date of birth and country). Raw PII never goes on-chain.
+
+
+The UI normalizes & packs the data:
+
+
+Country → ISO-3166-1 alpha-2 (e.g., "AR") → Bytes<2>.
+
+
+Age → completed years (u16) → Bytes<32> (age in the first 2 bytes).
+
+
+The UI calls the contract: enrollOnce(ageBytes, countryBytes).
+
+
+On-chain, the contract computes and stores only boolean flags:
+
+
+adult (age ≥ allowedMinAge, default 21).
+
+
+inCountry (country == allowedCountry, default "AR").
+
+
+epoch (policy version).
+
+
+The contract never stores the user’s actual age or country—only the resulting flags.
+
+
+The UI shows attestation status and exposes self-service updates:
+
+
+selfUpgradeToAdult(ageBytes) when the user becomes eligible.
+
+
+selfRefreshCountry(countryBytes) if their residency changes or policies update.
+
+
+Purchase & compliance enforcement (tokenized property example):
+
+
+When the user tries to buy a real-estate token on the tokenization platform, the dApp enforces KYC/Compliance by checking the stored flags:
+
+
+Front-end pre-gate (fast UX): call checkEligibleSelf() (or checkAdultSelf() + checkCountrySelf()) and only enable the “Buy” action if it returns 1.
+
+
+On-chain hard gate (recommended): the sale contract validates eligibility before accepting payment (e.g., assert adult == 1 and inCountry == 1 for the buyer’s uPk). This guarantees compliance even if a malicious UI skips checks.
+
+
+Admins can update policies via Ownable functions:
+
+
+setAllowedMinAge(age), setAllowedCountry(code), bumpEpoch().
+
+
+Changing policies triggers new checks (users can call selfRefreshCountry / selfUpgradeToAdult as needed).
+
+
+What runs where:
+
+
+Off-chain: ID OCR/validation (Gemini), age/country extraction, packing (u16 → Bytes<32>, "AR" → Bytes<2>).
+
+
+On-chain: deterministic flag computation & storage (adult, inCountry), read-only checks (check*), and (optionally) purchase gating in the sale contract.
+```
+
+
+
+
+## Installation Guide
+
+
+### Prerequisites
+- Node.js v18+ and npm v8+
+- Git
+- Midnight Lace wallet (for browser UI)
+- Access to Midnight testnet
+- Compact v0.17
+
+
+### Step-by-Step Installation
+
+
+```bash
+# 1. Clone repository
+git clone https://github.com/joacolinares/kyc-midnight
+cd repoMidNight
+
+
+# 2. Install root dependencies
+npm install --legacy-peer-deps
+
+
+# 3. Build API package
+cd api
+npm install
+npm run build
+cd ..
+
+
+# 4. Build contract
+cd contract
+npm install
+npm run compact  # Compile Compact contract
+npm run build     # Build TypeScript
+cd ..
+
+
+# 5. Setup CLI (optional)
+cd bboard-cli
+npm install
+npm run build
+cd ..
+
+
+# 6. Setup Web UI (optional)
+cd bboard-ui
+npm install
+npm run build
+cd ..
+```
+
+
+## Security Considerations
+
+
+### Private Key Management
+- Secret keys stored locally via LevelDB
+- Never transmitted or stored on-chain
+- Derived public keys used for identification
+
+
+### Zero-Knowledge Proofs
+- Age/country verified without revealing values
+- Proofs generated locally or via secure server
+- Circuit integrity verified on-chain
+
+
+### Access Control(OpenZeppelin)
+- Owner-only admin functions
+- Ownable pattern implementation
+- Ownership transfer capability
+
+
+
+
+## License
+
+
+Apache License 2.0
+
+
+## Acknowledgments
+
+
+- Midnight Foundation for blockchain infrastructure
+- IOG for Compact language development
+- Community contributors and testers
+
+
 
 ## 📋 Table of Contents
 
