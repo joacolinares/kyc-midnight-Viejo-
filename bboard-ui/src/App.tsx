@@ -13,12 +13,62 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { Box } from '@mui/material';
 import { MainLayout, Board } from './components';
 import { useDeployedBoardContext } from './hooks';
 import { type BoardDeployment } from './contexts';
 import { type Observable } from 'rxjs';
+import css from './index.css'
+
+interface ButtonProps {
+  onClick: () => void;
+  isActive: boolean;
+  children: React.ReactNode;
+}
+
+export const styles = {
+  container: {
+    fontFamily: 'sans-serif',
+    maxWidth: '600px',
+    margin: 'auto',
+    padding: '20px',
+    border: '1px solid #ccc',
+    borderRadius: '8px',
+    backgroundColor: '#fff'
+  },
+  button: (isActive: boolean) => ({
+    padding: '10px 20px',
+    fontSize: '14px',
+    backgroundColor: isActive ? '#007bff' : '#f8f9fa',
+    color: isActive ? 'white' : '#333',
+    border: '1px solid #dee2e6',
+    borderRadius: '4px',
+    cursor: 'pointer'
+  }),
+  uploadArea: {
+    border: '2px dashed #dee2e6',
+    borderRadius: '8px',
+    padding: '20px',
+    textAlign: 'center' as const,
+    backgroundColor: '#f8f9fa'
+  },
+  resultContainer: {
+    marginTop: '20px',
+    padding: '20px',
+    border: '1px solid #dee2e6',
+    borderRadius: '8px',
+    backgroundColor: '#f8f9fa',
+    boxShadow: '0 2px 4px rgba(0,0,0,0.05)'
+  },
+  resultItem: {
+    padding: '10px',
+    backgroundColor: 'white',
+    borderRadius: '4px',
+    border: '1px solid #e9ecef'
+  }
+};
+
 
 /**
  * The root bulletin board application component.
@@ -41,16 +91,52 @@ const App: React.FC = () => {
     };
   }, [boardApiProvider]);
 
+
+  const onJoinBoard = useCallback(
+    (contractAddress: any) => boardApiProvider.resolve(contractAddress),
+    [boardApiProvider],
+  );
+
+  // useEffect(() => {
+  //    //SE DEFINI ADDRESS DEL CONTTR
+
+  // }, [])
+
+
+  const SwitchButton: React.FC<ButtonProps> = ({ onClick, isActive, children }) => (
+    <button
+      onClick={onClick}
+      style={styles.button(isActive)}
+    >
+      {children}
+    </button>
+  );
+
   return (
     <Box sx={{ background: '#000', minHeight: '100vh' }}>
       <MainLayout>
+      <center>
+        
+  <button
+    className="connect-wallet-btn"
+    onClick={() =>
+      onJoinBoard("0200de94cf654bec52f403f235dd324f7613098bd862b4df3b9c22b6c3172de6709b")
+    }
+  >
+    🚀 Conectar Wallet
+  </button>
+
+  
+
+</center>
+
         {boardDeployments.map((boardDeployment, idx) => (
           <div data-testid={`board-${idx}`} key={`board-${idx}`}>
             <Board boardDeployment$={boardDeployment} />
           </div>
         ))}
         <div data-testid="board-start">
-          <Board />
+          {/* <Board /> */}
         </div>
       </MainLayout>
     </Box>

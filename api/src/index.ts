@@ -88,7 +88,7 @@ export interface DeployedBBoardAPI {
   getAllowedCountry(): Promise<Uint8Array>;
 
   // --- KYC usuario ---
-  enrollOnce(age: Uint8Array, country: Uint8Array): Promise<void>;
+  enrollOnce(): Promise<void>;
   checkAdultByUpk(uPk: Uint8Array): Promise<bigint>;
   checkAdultSelf(): Promise<bigint>;
 
@@ -184,9 +184,7 @@ export class BBoardAPI implements DeployedBBoardAPI {
    * This method can fail during local circuit execution if the bulletin board is currently occupied.
    */
   async post(age: Uint8Array, country: Uint8Array): Promise<void> {
-    console.log("INICIO DE LLAMADO")
-    const txData = await this.deployedContract.callTx.enrollOnce(bytes32,country2);
-    console.log("LLAMADA")
+    const txData = await this.deployedContract.callTx.enrollOnce();
 
     this.logger?.trace({
       transactionAdded: {
@@ -270,10 +268,10 @@ export class BBoardAPI implements DeployedBBoardAPI {
   // --- KYC usuario ---
   // Si tu circuito enrollOnce NO recibe params (usa witnesses), llamá sin args.
   // Si tu circuito SÍ recibe (age, country) como Bytes, dejamos ambos caminos:
-  async enrollOnce(age: Uint8Array, country: Uint8Array): Promise<void> {
+  async enrollOnce(): Promise<void> {
     const callTxAny = this.deployedContract.callTx as any;
     let tx =
-      (await callTxAny.enrollOnce?.(age, country)) ??
+      (await callTxAny.enrollOnce?.()) ??
       (await callTxAny.enrollOnce?.()); // fallback si la firma no lleva args
     if (!tx) throw new Error('enrollOnce circuit not available in this artifact');
     this.logger?.trace({ transactionAdded: { circuit: 'enrollOnce', txHash: tx.public.txHash, blockHeight: tx.public.blockHeight } });

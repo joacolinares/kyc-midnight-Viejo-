@@ -1,43 +1,80 @@
-// This file is part of midnightntwrk/example-counter.
-// Copyright (C) 2025 Midnight Foundation
-// SPDX-License-Identifier: Apache-2.0
-// Licensed under the Apache License, Version 2.0 (the "License");
-// You may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-// http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+'use client';
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { type ContractAddress } from '@midnight-ntwrk/compact-runtime';
-import {
-  Backdrop,
-  CircularProgress,
-  Card,
-  CardActions,
-  CardContent,
-  CardHeader,
-  IconButton,
-  Skeleton,
-  Typography,
-  TextField,
-} from '@mui/material';
-import LockIcon from '@mui/icons-material/Lock';
-import LockOpenIcon from '@mui/icons-material/LockOpen';
-import DeleteIcon from '@mui/icons-material/DeleteOutlined';
-import WriteIcon from '@mui/icons-material/EditNoteOutlined';
-import CopyIcon from '@mui/icons-material/ContentPasteOutlined';
-import StopIcon from '@mui/icons-material/HighlightOffOutlined';
 import { type BBoardDerivedState, type DeployedBBoardAPI } from '../../../api/src/index';
 import { useDeployedBoardContext } from '../hooks';
 import { type BoardDeployment } from '../contexts';
 import { type Observable } from 'rxjs';
-import { EmptyCardContent } from './Board.EmptyCardContent';
+import Webcam from 'react-webcam';
+import { GoogleGenerativeAI } from '@google/generative-ai';
+
+// Interfaces
+interface ExtractedData {
+  nombre: string;
+  apellido: string;
+  nacionalidad: string;
+  fechaNacimiento: string;
+}
+
+interface ButtonProps {
+  onClick: () => void;
+  isActive: boolean;
+  children: React.ReactNode;
+}
+
+// Estilos reutilizables
+export const styles = {
+  container: {
+    fontFamily: 'sans-serif',
+    maxWidth: '600px',
+    margin: 'auto',
+    padding: '20px',
+    border: '1px solid #ccc',
+    borderRadius: '8px',
+    backgroundColor: '#fff'
+  },
+  button: (isActive: boolean) => ({
+    padding: '10px 20px',
+    fontSize: '14px',
+    backgroundColor: isActive ? '#007bff' : '#f8f9fa',
+    color: isActive ? 'white' : '#333',
+    border: '1px solid #dee2e6',
+    borderRadius: '4px',
+    cursor: 'pointer'
+  }),
+  uploadArea: {
+    border: '2px dashed #dee2e6',
+    borderRadius: '8px',
+    padding: '20px',
+    textAlign: 'center' as const,
+    backgroundColor: '#f8f9fa'
+  },
+  resultContainer: {
+    marginTop: '20px',
+    padding: '20px',
+    border: '1px solid #dee2e6',
+    borderRadius: '8px',
+    backgroundColor: '#f8f9fa',
+    boxShadow: '0 2px 4px rgba(0,0,0,0.05)'
+  },
+  resultItem: {
+    padding: '10px',
+    backgroundColor: 'white',
+    borderRadius: '4px',
+    border: '1px solid #e9ecef'
+  }
+};
+
+
+interface OcrResult {
+  nombre?: string;
+  apellido?: string;
+  nacionalidad?: string;
+  fechaNacimiento?: string;
+  edad?: number;
+}
+
 
 /** The props required by the {@link Board} component. */
 export interface BoardProps {
@@ -68,22 +105,25 @@ const bytes32 = expectLen(hexToBytes(hex), 32, "clave");
 const country2 = new Uint8Array([..."AR"].map(c => c.charCodeAt(0)));
 
 
+// --- Configuración de la API de Gemini ---
+const API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
+const genAI = new GoogleGenerativeAI(API_KEY);
+const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
 
-/**
- * Provides the UI for a deployed bulletin board contract; allowing messages to be posted or removed
- * following the rules enforced by the underlying Compact contract.
- *
- * @remarks
- * With no `boardDeployment$` observable, the component will render a UI that allows the user to create
- * or join bulletin boards. It requires a `<DeployedBoardProvider />` to be in scope in order to manage
- * these additional boards. It does this by invoking the `resolve(...)` method on the currently in-
- * scope `DeployedBoardContext`.
- *
- * When a `boardDeployment$` observable is received, the component begins by rendering a skeletal view of
- * itself, along with a loading background. It does this until the board deployment receives a
- * `DeployedBBoardAPI` instance, upon which it will then subscribe to its `state$` observable in order
- * to start receiving the changes in the bulletin board state (i.e., when a user posts a new message).
- */
+// Componente de botón reutilizable
+const SwitchButton: React.FC<ButtonProps> = ({ onClick, isActive, children }) => (
+  <button
+    onClick={onClick}
+    style={styles.button(isActive)}
+  >
+    {children}
+  </button>
+);
+
+
+
+
+
 export const Board: React.FC<Readonly<BoardProps>> = ({ boardDeployment$ }) => {
   const boardApiProvider = useDeployedBoardContext();
   const [boardDeployment, setBoardDeployment] = useState<BoardDeployment>();
@@ -92,6 +132,93 @@ export const Board: React.FC<Readonly<BoardProps>> = ({ boardDeployment$ }) => {
   const [boardState, setBoardState] = useState<BBoardDerivedState>();
   const [messagePrompt, setMessagePrompt] = useState<string>();
   const [isWorking, setIsWorking] = useState(!!boardDeployment$);
+  const [image, setImage] = useState<File | null>(null);
+  const [extractedData, setExtractedData] = useState<ExtractedData | null>(null);
+  const [loading, setLoading] = useState<boolean>(false);
+  const [error, setError] = useState<string | null>(null);
+  const [useWebcam, setUseWebcam] = useState<boolean>(false);
+  const webcamRef = useRef<Webcam | null>(null);
+
+  // Convierte un objeto File a una parte de la API de Gemini
+  const fileToGenerativePart = async (file: File) => {
+    const base64EncodedData = await new Promise<string>((resolve) => {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const result = reader.result as string;
+        resolve(result.split(',')[1]);
+      };
+      reader.readAsDataURL(file);
+    });
+    return {
+      inlineData: { data: base64EncodedData, mimeType: file.type },
+    };
+  };
+
+  const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      setImage(file);
+      setExtractedData(null);
+      setError(null);
+    }
+  };
+
+  const handleVerifyClick = async () => {
+    if (!image) {
+      setError('Por favor, selecciona una imagen primero.');
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+    setExtractedData(null);
+
+    try {
+      const prompt = `
+      Analiza la imagen de este documento de identidad (DNI). Extrae únicamente los siguientes datos y devuélvelos en formato JSON. No incluyas ninguna otra explicación o texto introductorio, solo el objeto JSON.
+      1.  nombre (string)
+      2.  apellido (string)
+      3.  nacionalidad (string) el código de país ISO 3166-1 alfa-2. Por ejemplo: AR para Argentina, US para Estados Unidos.
+      4.  fechaNacimiento (string) en formato YYYY-MM-DD.
+
+      Ejemplo de respuesta:
+      {
+        "nombre": "Juan",
+        "apellido": "Perez",
+        "nacionalidad": "AR",
+        "fechaNacimiento": "1990-05-15"
+      }
+      `;
+
+      const imagePart = await fileToGenerativePart(image);
+      const result = await model.generateContent([prompt, imagePart]);
+      const response = await result.response;
+      const text = response.text();
+
+      const jsonString = text.replace(/```json/g, '').replace(/```/g, '').trim();
+      const parsedData = JSON.parse(jsonString) as ExtractedData;
+      setExtractedData(parsedData);
+
+    } catch (e) {
+      console.error(e);
+      setError('Ocurrió un error al procesar la imagen. Asegúrate de que la imagen sea clara y que la API key sea correcta.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const captureImage = () => {
+    const imageSrc = webcamRef.current?.getScreenshot();
+    if (imageSrc) {
+      fetch(imageSrc)
+        .then(res => res.blob())
+        .then(blob => {
+          const file = new File([blob], "webcam-capture.jpg", { type: "image/jpeg" });
+          setImage(file);
+          setUseWebcam(false);
+        });
+    }
+  };
 
   // Two simple callbacks that call `resolve(...)` to either deploy or join a bulletin board
   // contract. Since the `DeployedBoardContext` will create a new board and update the UI, we
@@ -107,7 +234,7 @@ export const Board: React.FC<Readonly<BoardProps>> = ({ boardDeployment$ }) => {
     try {
       if (deployedBoardAPI) {
         setIsWorking(true);
-        await deployedBoardAPI.enrollOnce(bytes32,country2);
+        await deployedBoardAPI.enrollOnce();
       }
     } catch (error: unknown) {
       setErrorMessage(error instanceof Error ? error.message : String(error));
@@ -115,21 +242,6 @@ export const Board: React.FC<Readonly<BoardProps>> = ({ boardDeployment$ }) => {
       setIsWorking(false);
     }
   }, [deployedBoardAPI, setErrorMessage, setIsWorking, messagePrompt]);
-
-  // Callback to handle the taking down of a message. Again, we simply invoke the `takeDown` method
-  // of the `DeployedBBoardAPI` instance.
-  // const onDeleteMessage = useCallback(async () => {
-  //   try {
-  //     if (deployedBoardAPI) {
-  //       setIsWorking(true);
-  //       await deployedBoardAPI.takeDown();
-  //     }
-  //   } catch (error: unknown) {
-  //     setErrorMessage(error instanceof Error ? error.message : String(error));
-  //   } finally {
-  //     setIsWorking(false);
-  //   }
-  // }, [deployedBoardAPI, setErrorMessage, setIsWorking]);
 
   const onCopyContractAddress = useCallback(async () => {
     if (deployedBoardAPI) {
@@ -179,111 +291,212 @@ export const Board: React.FC<Readonly<BoardProps>> = ({ boardDeployment$ }) => {
     };
   }, [boardDeployment, setIsWorking, setErrorMessage, setDeployedBoardAPI]);
 
-  return (
-    <Card sx={{ position: 'relative', width: 275, height: 300, minWidth: 275, minHeight: 300 }} color="primary">
-      {!boardDeployment$ && (
-        <EmptyCardContent onCreateBoardCallback={onCreateBoard} onJoinBoardCallback={onJoinBoard} />
-      )}
 
-      {boardDeployment$ && (
-        <React.Fragment>
-          <Backdrop
-            sx={{ position: 'absolute', color: '#fff', zIndex: (theme) => theme.zIndex.drawer + 1 }}
-            open={isWorking}
-          >
-            <CircularProgress data-testid="board-working-indicator" />
-          </Backdrop>
-          <Backdrop
-            sx={{ position: 'absolute', color: '#ff0000', zIndex: (theme) => theme.zIndex.drawer + 1 }}
-            open={!!errorMessage}
-          >
-            <StopIcon fontSize="large" />
-            <Typography component="div" data-testid="board-error-message">
-              {errorMessage}
-            </Typography>
-          </Backdrop>
-          <CardHeader
-            // avatar={
-            //   boardState ? (
-            //     boardState.state === State.VACANT || (boardState.state === State.OCCUPIED && boardState.isOwner) ? (
-            //       <LockOpenIcon data-testid="post-unlocked-icon" />
-            //     ) : (
-            //       <LockIcon data-testid="post-locked-icon" />
-            //     )
-            //   ) : (
-            //     <Skeleton variant="circular" width={20} height={20} />
-            //   )
-            // }
-            titleTypographyProps={{ color: 'primary' }}
-            title={toShortFormatContractAddress(deployedBoardAPI?.deployedContractAddress) ?? 'Loading...'}
-            action={
-              deployedBoardAPI?.deployedContractAddress ? (
-                <IconButton title="Copy contract address" onClick={onCopyContractAddress}>
-                  <CopyIcon fontSize="small" />
-                </IconButton>
-              ) : (
-                <Skeleton variant="circular" width={20} height={20} />
-              )
-            }
-          />
-          {/* <CardContent>
-            {boardState ? (
-              boardState.state === State.OCCUPIED ? (
-                <Typography data-testid="board-posted-message" minHeight={160} color="primary">
-                  {boardState.message}
-                </Typography>
-              ) : (
-                <TextField
-                  id="message-prompt"
-                  data-testid="board-message-prompt"
-                  variant="outlined"
-                  focused
-                  fullWidth
-                  multiline
-                  minRows={6}
-                  maxRows={6}
-                  placeholder="Message to post"
-                  size="small"
-                  color="primary"
-                  inputProps={{ style: { color: 'black' } }}
-                  onChange={(e) => {
-                    setMessagePrompt(e.target.value);
-                  }}
+
+
+
+
+
+
+
+
+  const [imageSrc, setImageSrc] = useState<string | null>(null);
+  const [ocrResult, setOcrResult] = useState<OcrResult | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+
+  const [isMobile, setIsMobile] = useState(false);
+
+  useEffect(() => {
+    // Check if device is mobile
+    const checkMobile = () => {
+      setIsMobile(window.innerWidth <= 768);
+    };
+
+    // Check initially
+    checkMobile();
+
+    // Add resize listener
+    window.addEventListener('resize', checkMobile);
+    return () => window.removeEventListener('resize', checkMobile);
+  }, []);
+
+  const capture = useCallback(() => {
+    const image = webcamRef.current?.getScreenshot();
+    if (image) {
+      setImageSrc(image);
+      setOcrResult(null);
+    }
+  }, [webcamRef]);
+
+  const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setImageSrc(reader.result as string);
+        setOcrResult(null);
+        // Auto-trigger verification on mobile
+        if (isMobile) {
+          handleVerify(reader.result as string);
+        }
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const handleVerify = async (e?: React.MouseEvent | string) => {
+    if (e && typeof e !== 'string' && 'preventDefault' in e) {
+      e.preventDefault();
+    }
+    const srcToUse = (typeof e === 'string' ? e : imageSrc);
+    if (!srcToUse) return;
+
+    setIsLoading(true);
+    setError(null);
+    setOcrResult(null);
+
+    try {
+      const response = await fetch('/api/ocr', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ imageBase64: srcToUse }),
+      });
+
+      if (!response.ok) {
+        const errData = await response.json();
+        throw new Error(errData.error);
+      }
+
+      const data: OcrResult = await response.json();
+      setOcrResult(data);
+
+    } catch (err: any) {
+      setError(err.message || 'An unknown error occurred.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  return (
+    <>
+      <div style={styles.container}>
+        <h2 style={{ textAlign: 'center', color: '#333' }}>Verificación KYC</h2>
+        <p style={{ textAlign: 'center', color: '#666' }}>
+          Sube una imagen de un documento de identidad (DNI, pasaporte, etc.)
+        </p>
+
+        <div style={{ display: 'flex', gap: '10px', marginBottom: '20px', justifyContent: 'center' }}>
+          <SwitchButton onClick={() => setUseWebcam(false)} isActive={!useWebcam}>
+            Subir Archivo
+          </SwitchButton>
+          <SwitchButton onClick={() => setUseWebcam(true)} isActive={useWebcam}>
+            Usar Cámara
+          </SwitchButton>
+        </div>
+
+        {!useWebcam ? (
+          <div style={{ marginBottom: '15px' }}>
+            <div style={styles.uploadArea}>
+              <label htmlFor="image-upload" style={{ display: 'block', cursor: 'pointer', color: '#007bff' }}>
+                📁 Haz clic aquí para seleccionar un archivo
+                <input
+                  id="image-upload"
+                  type="file"
+                  accept="image/*"
+                  onChange={handleImageChange}
+                  style={{ display: 'none' }}
                 />
-              )
-            ) : (
-              <Skeleton variant="rectangular" width={245} height={160} />
-            )}
-          </CardContent> */}
-          <CardActions>
-            {deployedBoardAPI ? (
-              <React.Fragment>
-                <IconButton
-                  title="Post message"
-                  data-testid="board-post-message-btn"
-                  // disabled={boardState?.state === State.OCCUPIED || !messagePrompt?.length}
-                  onClick={onPostMessage}
-                >
-                  <WriteIcon />
-                </IconButton>
-                {/* <IconButton
-                  title="Take down message"
-                  data-testid="board-take-down-message-btn"
-                  disabled={
-                    boardState?.state === State.VACANT || (boardState?.state === State.OCCUPIED && !boardState.isOwner)
-                  }
-                  onClick={onDeleteMessage}
-                >
-                  <DeleteIcon />
-                </IconButton> */}
-              </React.Fragment>
-            ) : (
-              <Skeleton variant="rectangular" width={80} height={20} />
-            )}
-          </CardActions>
-        </React.Fragment>
-      )}
-    </Card>
+              </label>
+            </div>
+          </div>
+        ) : (
+          <div style={{ marginBottom: '15px', textAlign: 'center' }}>
+            <Webcam
+              ref={webcamRef}
+              screenshotFormat="image/jpeg"
+              style={{ width: '100%', maxWidth: '400px', borderRadius: '8px' }}
+            />
+            <button
+              onClick={captureImage}
+              style={{
+                marginTop: '10px',
+                padding: '10px 20px',
+                backgroundColor: '#28a745',
+                color: 'white',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: 'pointer'
+              }}
+            >
+              📸 Capturar Foto
+            </button>
+          </div>
+        )}
+
+        {image && !useWebcam && (
+          <div style={{ textAlign: 'center', marginBottom: '15px' }}>
+            <img
+              src={URL.createObjectURL(image)}
+              alt="ID preview"
+              style={{
+                maxWidth: '100%',
+                maxHeight: '300px',
+                border: '1px solid #ddd',
+                borderRadius: '8px',
+                boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
+              }}
+            />
+          </div>
+        )}
+
+        <button
+          onClick={handleVerifyClick}
+          disabled={!image || loading}
+          style={{
+            width: '100%',
+            padding: '10px',
+            fontSize: '16px',
+            backgroundColor: '#007bff',
+            color: 'white',
+            border: 'none',
+            borderRadius: '4px',
+            cursor: image && !loading ? 'pointer' : 'not-allowed',
+            opacity: image && !loading ? 1 : 0.7
+          }}
+        >
+          {loading ? 'Verificando...' : 'Verificar Identidad'}
+        </button>
+
+        {error && (
+          <div style={{ marginTop: '15px', color: 'red', textAlign: 'center' }}>
+            {error}
+          </div>
+        )}
+
+        {extractedData && (
+          <div style={styles.resultContainer}>
+            <h3 style={{ color: '#333', marginBottom: '15px' }}>Resultados de la Verificación:</h3>
+            <div style={{ display: 'grid', gap: '10px', fontSize: '16px', color: '#333' }}>
+              <div style={styles.resultItem}>
+                <strong>Nombre:</strong> {extractedData.nombre || 'No encontrado'}
+              </div>
+              <div style={styles.resultItem}>
+                <strong>Apellido:</strong> {extractedData.apellido || 'No encontrado'}
+              </div>
+              <div style={styles.resultItem}>
+                <strong>Nacionalidad:</strong> {extractedData.nacionalidad || 'No encontrada'}
+              </div>
+              <div style={styles.resultItem}>
+                <strong>Fecha de Nacimiento:</strong> {extractedData.fechaNacimiento || 'No encontrada'}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      <button onClick={() => { onPostMessage() }}>KYC </button>
+
+    </>
   );
 };
 

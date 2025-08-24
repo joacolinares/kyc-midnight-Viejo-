@@ -60,12 +60,24 @@ export const createBBoardPrivateState = (secretKey: Uint8Array) => ({
  * and a Uint8Array (because the contract declared a return value of Bytes[32],
  * and that's a Uint8Array in TypeScript).
  *
- * The localSecretKey witness does not need the ledger or contractAddress
+ * The userSecretKey witness does not need the ledger or contractAddress
  * from the WitnessContext, so it uses the parameter notation that puts
  * only the binding for the privateState in scope.
  */
 export const witnesses = {
-  localSecretKey: ({
+  userSecretKey: ({
+    privateState,
+  }: WitnessContext<Ledger, BBoardPrivateState>): [
+    BBoardPrivateState,
+    Uint8Array,
+  ] => [privateState, privateState.secretKey],
+  userAgeBytes: ({
+    privateState,
+  }: WitnessContext<Ledger, BBoardPrivateState>): [
+    BBoardPrivateState,
+    Uint8Array,
+  ] => [privateState, privateState.secretKey],
+  userCountryAlpha2: ({
     privateState,
   }: WitnessContext<Ledger, BBoardPrivateState>): [
     BBoardPrivateState,

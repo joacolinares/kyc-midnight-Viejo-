@@ -256,7 +256,7 @@ const initializeProviders = async (logger: Logger): Promise<BBoardProviders> => 
 };
 
 /** @internal */
-const connectToWallet = (logger: Logger): Promise<{ wallet: DAppConnectorWalletAPI; uris: ServiceUriConfig }> => {
+export const connectToWallet = (logger: any): Promise<{ wallet: DAppConnectorWalletAPI; uris: ServiceUriConfig }> => {
   const COMPATIBLE_CONNECTOR_API_VERSION = '1.x';
 
   return firstValueFrom(
@@ -300,7 +300,6 @@ const connectToWallet = (logger: Logger): Promise<{ wallet: DAppConnectorWalletA
       concatMap(async (connectorAPI) => {
         const isEnabled = await connectorAPI.isEnabled();
         const value = (await(await connectorAPI.enable()).state())
-        console.log(value)
         logger.info(isEnabled, 'Wallet connector API enabled status');
 
         return connectorAPI;

@@ -16,21 +16,36 @@
 import React from 'react';
 import { Box } from '@mui/material';
 import { Header } from './Header';
+import { motion, useScroll, useTransform } from "framer-motion";
 
 /**
  * Provides layout for the bulletin board application.
  */
 export const MainLayout: React.FC<React.PropsWithChildren> = ({ children }) => {
+
+
+  const { scrollY } = useScroll();
+
+  // Ajustá los valores según el efecto que quieras
+  const y = useTransform(scrollY, [0, 500], [0, 100]);
+
+
   return (
     <Box sx={{ minHeight: '100vh', overflow: 'hidden' }}>
       <Header />
       <Box sx={{ px: 10, position: 'relative', height: '100%' }}>
-        <img
-          src="/logo-render.png"
-          alt="logo-image"
-          height={607}
-          style={{ position: 'absolute', zIndex: 1, left: '2vw', top: '5vh' }}
-        />
+      <motion.img
+      src="/logo-render.png"
+      alt="logo-image"
+      height={607}
+      style={{
+        position: "absolute",
+        zIndex: 1,
+        left: "2vw",
+        top: "5vh",
+        y,
+      }}
+    />
         <Box
           sx={{
             zIndex: 999,

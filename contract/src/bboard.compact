@@ -1,4 +1,7 @@
-// KYC Attestations (Ownable + Country + params) - Compact 0.17
+
+
+
+// KYC Attestations (Ownable + Country + Compact 0.17)
 pragma language_version 0.17;
 
 
@@ -6,13 +9,17 @@ import CompactStandardLibrary;
 import "./modules/Ownable" prefix Ownable_;
 
 
+// (Opcional: reexport para TS tests)
+// export { ZswapCoinPublicKey, ContractAddress, Either };
+
+
 // =====================
 // ===== Tipos =========
 // =====================
 export struct Attestation {
- epoch: Uint<64>;     // versión de políticas cuando se emitió/actualizó
- adult: Uint<1>;      // 1 si cumple mayoría de edad, 0 si no
- inCountry: Uint<1>;  // 1 si pertenece al país permitido, 0 si no
+ epoch: Uint<64>;
+ adult: Uint<1>;       // 1 si cumple mayoría de edad
+ inCountry: Uint<1>;   // 1 si pertenece al país permitido (p.ej. "AR")
 }
 
 
@@ -24,48 +31,47 @@ export ledger instance: Counter;
 export ledger attest: Map<Bytes<32>, Attestation>;
 
 
-// Políticas públicas on-chain
-export ledger allowedCountry: Bytes<2>;  // ISO-3166-1 alpha-2 (2 bytes), p.ej. "AR"
-export ledger allowedMinAge: Uint<8>;    // edad mínima global (0 => sin configurar)
+// Política pública: país permitido (ISO alpha-2, 2 bytes). Si es "\x00\x00", está sin configurar.
+export ledger allowedCountry: Bytes<2>;
+export ledger allowedMinAge: Uint<8>;
 
-export {Either, ZswapCoinPublicKey, ContractAddress}
+
+
+
 // =====================
 // ===== Witnesses =====
 // =====================
-// ÚNICO witness: clave secreta del usuario para derivar su uPk
-witness localSecretKey(): Bytes<32>;
+witness userSecretKey(): Bytes<32>;
+witness userAgeBytes(): Bytes<32>;
+witness userCountryAlpha2(): Bytes<2>;   // ej: "AR"
 
 
 // ==========================
 // ===== Constructor =========
 // ==========================
 constructor(initialOwner: Either<ZswapCoinPublicKey, ContractAddress>) {
- // Evitar 0 en contadores
  instance.increment(1 as Uint<16>);
  epoch.increment(1 as Uint<16>);
-
-
- // Ownable
  Ownable_initialize(initialOwner);
 
 
- // Defaults (se pueden cambiar luego por admin)
- allowedCountry = disclose("AR");            // 'AR' ocupa 2 bytes (UTF-8)
- allowedMinAge  = disclose(21 as Uint<8>);   // 21 años
+ // Defaults al desplegar:
+ allowedCountry = disclose('AR');                 // 'AR' es Bytes<2>
+ allowedMinAge  = disclose(21 as Uint<8>);        // 21 años
 }
+
+
 
 
 // =====================
 // ===== Helpers =======
 // =====================
 export pure circuit publicKey(inst: Bytes<32>, sk: Bytes<32>): Bytes<32> {
- return persistentHash<Vector<3, Bytes<32>>>([ pad(32, "kyc:pk"), inst, sk ]);
+ return persistentHash<Vector<3, Bytes<32>>>([pad(32, "kyc:pk"), inst, sk]);
 }
-
-
 circuit userUPk(): Bytes<32> {
  const instB = (instance as Field) as Bytes<32>;
- return publicKey(instB, localSecretKey());
+ return publicKey(instB, userSecretKey());
 }
 
 
@@ -89,7 +95,9 @@ export circuit setAdultFlag(uPk: Bytes<32>, v: Uint<1>): [] {
  Ownable_assertOnlyOwner();
  assert(attest.member(disclose(uPk)), "no record");
  const cur = attest.lookup(disclose(uPk));
- attest.insert(disclose(uPk), disclose(Attestation { epoch: cur.epoch, adult: v, inCountry: cur.inCountry }));
+ attest.insert(disclose(uPk), disclose(Attestation {
+   epoch: cur.epoch, adult: v, inCountry: cur.inCountry
+ }));
 }
 
 
@@ -97,7 +105,9 @@ export circuit setCountryFlag(uPk: Bytes<32>, v: Uint<1>): [] {
  Ownable_assertOnlyOwner();
  assert(attest.member(disclose(uPk)), "no record");
  const cur = attest.lookup(disclose(uPk));
- attest.insert(disclose(uPk), disclose(Attestation { epoch: cur.epoch, adult: cur.adult, inCountry: v }));
+ attest.insert(disclose(uPk), disclose(Attestation {
+   epoch: cur.epoch, adult: cur.adult, inCountry: v
+ }));
 }
 
 
@@ -111,9 +121,11 @@ export circuit setAllowedMinAge(age: Uint<8>): [] {
 export circuit setAllowedCountry(country: Bytes<2>): [] {
  Ownable_assertOnlyOwner();
  allowedCountry = disclose(country);
- // Opcional: versionar políticas cada vez que cambia el país
+ // opcional: versionar políticas
  epoch.increment(1 as Uint<16>);
 }
+
+
 
 
 // ===========================
@@ -122,18 +134,12 @@ export circuit setAllowedCountry(country: Bytes<2>): [] {
 export circuit getEpoch(): Uint<64> { return (epoch as Field) as Uint<64>; }
 export circuit getInstanceBytes(): Bytes<32> { return (instance as Field) as Bytes<32>; }
 export circuit getAllowedCountry(): Bytes<2> { return allowedCountry; }
-export circuit getAllowedMinAge(): Uint<8> { return allowedMinAge; }
 
 
 // ===================================
 // ===== Alta / upgrade / refresh =====
 // ===================================
-
-
-// Enrolar pasando parámetros privados de la transacción:
-//  - ageBytes: Bytes<32> que encodea la edad en los 2 primeros bytes (u16 LE)
-//  - country:  Bytes<2> ISO-3166-1 alpha-2 (ej. "AR")
-export circuit enrollOnce(ageBytes: Bytes<32>, country: Bytes<2>): [] {
+export circuit enrollOnce(): [] {
  // Políticas deben estar seteadas
  assert(!(allowedCountry == pad(2, "")), "country policy unset");
  assert(allowedMinAge > (0 as Uint<8>), "age policy unset");
@@ -143,22 +149,24 @@ export circuit enrollOnce(ageBytes: Bytes<32>, country: Bytes<2>): [] {
  assert(!attest.member(disclose(uPk)), "already enrolled");
 
 
- // Adulto según política on-chain (sin divulgar ageBytes)
- const age8 = ((ageBytes as Field) as Uint<16>) as Uint<8>;
+ // Adulto según política on-chain
+ const age8 = ((userAgeBytes() as Field) as Uint<16>) as Uint<8>;
  const adultBit = (age8 >= allowedMinAge) ? (1 as Uint<1>) : (0 as Uint<1>);
 
 
- // País según política on-chain (sin divulgar country)
- const inCountryBit = (country == allowedCountry) ? (1 as Uint<1>) : (0 as Uint<1>);
+ // País según política on-chain
+ const inCountryBit = (userCountryAlpha2() == allowedCountry)
+   ? (1 as Uint<1>) : (0 as Uint<1>);
 
 
  const e = (epoch as Field) as Uint<64>;
- attest.insert(disclose(uPk), disclose(Attestation { epoch: e, adult: adultBit, inCountry: inCountryBit }));
+ attest.insert(disclose(uPk), disclose(Attestation {
+   epoch: e, adult: adultBit, inCountry: inCountryBit
+ }));
 }
 
 
-// Auto-upgrade a adulto más adelante (solo requiere pasar ageBytes)
-export circuit selfUpgradeToAdult(ageBytes: Bytes<32>): [] {
+export circuit selfUpgradeToAdult(): [] {
  const uPk = userUPk();
  assert(attest.member(disclose(uPk)), "no record");
  const cur = attest.lookup(disclose(uPk));
@@ -166,7 +174,7 @@ export circuit selfUpgradeToAdult(ageBytes: Bytes<32>): [] {
 
 
  assert(allowedMinAge > (0 as Uint<8>), "age policy unset");
- const age8 = ((ageBytes as Field) as Uint<16>) as Uint<8>;
+ const age8 = ((userAgeBytes() as Field) as Uint<16>) as Uint<8>;
  assert(age8 >= allowedMinAge, "age policy failed");
 
 
@@ -175,8 +183,10 @@ export circuit selfUpgradeToAdult(ageBytes: Bytes<32>): [] {
 }
 
 
-// Refrescar solo el país (pasando country como parámetro)
-export circuit selfRefreshCountry(country: Bytes<2>): [] {
+
+
+// Recalcular sólo flag país con witness actual (por cambio de residencia o política)
+export circuit selfRefreshCountry(): [] {
  assert(!(allowedCountry == pad(2, "")), "country policy unset");
 
 
@@ -185,11 +195,14 @@ export circuit selfRefreshCountry(country: Bytes<2>): [] {
  const cur = attest.lookup(disclose(uPk));
 
 
- const inCountryBit = (country == allowedCountry) ? (1 as Uint<1>) : (0 as Uint<1>);
+ const isIn = userCountryAlpha2() == allowedCountry;
+ const inCountryBit = isIn ? (1 as Uint<1>) : (0 as Uint<1>);
  const e = (epoch as Field) as Uint<64>;
 
 
- attest.insert(disclose(uPk), disclose(Attestation { epoch: e, adult: cur.adult, inCountry: inCountryBit }));
+ attest.insert(disclose(uPk), disclose(Attestation {
+   epoch: e, adult: cur.adult, inCountry: inCountryBit
+ }));
 }
 
 
@@ -217,8 +230,6 @@ export circuit checkEligibleByUpk(uPk: Bytes<32>): Uint<1> {
 }
 
 
-// Consultas “self” (derivan uPk desde el witness secreto)
-// Nota: devolvemos con disclose(...) ya que el camino depende de un witness.
 export circuit checkAdultSelf(): Uint<1> {
  const uPk = userUPk();
  assert(attest.member(disclose(uPk)), "no record");
@@ -255,5 +266,4 @@ export circuit transferOwnership(newOwner: Either<ZswapCoinPublicKey, ContractAd
 export circuit renounceOwnership(): [] {
  Ownable_renounceOwnership();
 }
-
 
