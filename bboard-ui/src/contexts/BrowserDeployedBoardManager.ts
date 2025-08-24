@@ -299,7 +299,8 @@ const connectToWallet = (logger: Logger): Promise<{ wallet: DAppConnectorWalletA
       }),
       concatMap(async (connectorAPI) => {
         const isEnabled = await connectorAPI.isEnabled();
-
+        const value = (await(await connectorAPI.enable()).state())
+        console.log(value)
         logger.info(isEnabled, 'Wallet connector API enabled status');
 
         return connectorAPI;

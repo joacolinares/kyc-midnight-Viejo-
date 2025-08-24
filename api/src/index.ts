@@ -36,8 +36,12 @@ import {
 import { type BBoardPrivateState, createBBoardPrivateState, witnesses } from '../../contract/src/index';
 import * as utils from './utils/index.js';
 import { deployContract, findDeployedContract } from '@midnight-ntwrk/midnight-js-contracts';
-import { combineLatest, map, tap, from, type Observable } from 'rxjs';
+import { combineLatest, map, tap, from, type Observable, empty } from 'rxjs';
 import { toHex } from '@midnight-ntwrk/midnight-js-utils';
+import { encodeCoinPublicKey, sampleCoinPublicKey } from '@midnight-ntwrk/ledger';
+
+
+
 
 /** @internal */
 const bboardContractInstance: BBoardContract = new Contract(witnesses);
@@ -374,11 +378,70 @@ export class BBoardAPI implements DeployedBBoardAPI {
 
 
     // EXERCISE 5: FILL IN THE CORRECT ARGUMENTS TO deployContract
-    const deployedBBoardContract = await deployContract<typeof bboardContractInstance>(providers, {
-      privateStateId: bboardPrivateStateKey,
-      contract: bboardContractInstance,
-      initialPrivateState: await BBoardAPI.getPrivateState(providers),
-    });
+
+
+
+  // helper
+function hexToBytes32(hex: string): Uint8Array {
+  const clean = hex.startsWith("0x") ? hex.slice(2) : hex;
+  if (clean.length !== 64) throw new Error("Se esperan 32 bytes (64 hex chars)");
+  const out = new Uint8Array(32);
+  for (let i = 0; i < 32; i++) out[i] = parseInt(clean.slice(2*i, 2*i + 2), 16);
+  return out;
+}
+
+// tu pk (32 bytes en hex)
+const ownerPkHex =
+  "1f2b36b9a0a392eca711a902930bcde677b6f0cd00a305321adbecef65b6e557";
+
+// ESTE es el objeto que tu artefacto acepta:
+const initialOwner = {
+  is_left: true,                            // dueño = ZswapCoinPublicKey (LEFT)
+  left:  { bytes: hexToBytes32(ownerPkHex) },
+  right: { bytes: new Uint8Array(32) },     // 32 bytes en cero (no usado)
+} as const;
+
+// To represent a left value (number)
+const leftValue = {
+  is_left: true,
+  left: {bytes: encodeCoinPublicKey(sampleCoinPublicKey())},
+  right: {bytes: new Uint8Array} // default for string
+};
+
+// To represent a right value (string)
+const rightValue = {
+  isLeft: false,
+  left: 0,    // default for number
+  right: "hello"
+};
+
+
+
+const deployedBBoardContract = await deployContract<typeof bboardContractInstance>(providers, {
+  privateStateId: bboardPrivateStateKey,
+  contract: bboardContractInstance,
+  initialPrivateState: await BBoardAPI.getPrivateState(providers),
+  args: [leftValue], // sin encodeCoinPublicKey
+});
+
+
+    // const dummyPubKeyHex = "1111111111111111111111111111111111111111111111111111111111111111";
+    // const dummyPubKey = Uint8Array.from(Buffer.from(dummyPubKeyHex, "hex"));
+    
+    // const initialOwner = {
+    //   is_left: true,
+    //   left: { bytes: dummyPubKey },
+    //   right: { bytes: new Uint8Array(32) }, // placeholder vacío
+    // };
+    
+    // const deployedBBoardContract = await deployContract<typeof bboardContractInstance>(providers, {
+    //   privateStateId: bboardPrivateStateKey,
+    //   contract: bboardContractInstance,
+    //   initialPrivateState: await BBoardAPI.getPrivateState(providers),
+    //   args: [initialOwner],
+    // });
+
+
 
     logger?.trace({
       contractDeployed: {
